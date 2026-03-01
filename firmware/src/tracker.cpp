@@ -314,8 +314,8 @@ static FaceData tracker_process_esp_who(camera_fb_t *fb) {
 static FaceData tracker_process_heuristic(camera_fb_t *fb) {
     FaceData face = {};
 
-    const float frame_mean = region_luma_mean(fb, 0, 0, fb->width, fb->height, 4);
-    const float variance = frame_luma_variance(fb, frame_mean, 4);
+    const float frame_mean = region_luma_mean(fb, 0, 0, fb->width, fb->height, 8);
+    const float variance = frame_luma_variance(fb, frame_mean, 8);
 
     float center_saturation = region_saturation_mean(
         fb,
@@ -323,7 +323,7 @@ static FaceData tracker_process_heuristic(camera_fb_t *fb) {
         (fb->height * 15) / 100,
         (fb->width * 80) / 100,
         (fb->height * 85) / 100,
-        4
+        6
     );
 
     const bool brightness_ok = frame_mean > 25.0f && frame_mean < 225.0f;
@@ -351,9 +351,9 @@ static FaceData tracker_process_heuristic(camera_fb_t *fb) {
     const int mouth_y0 = (height * 55) / 100;
     const int mouth_y1 = (height * 85) / 100;
 
-    float left_eye_mean = region_luma_mean(fb, left_eye_x0, eye_y0, left_eye_x1, eye_y1, 2);
-    float right_eye_mean = region_luma_mean(fb, right_eye_x0, eye_y0, right_eye_x1, eye_y1, 2);
-    float mouth_mean = region_luma_mean(fb, mouth_x0, mouth_y0, mouth_x1, mouth_y1, 2);
+    float left_eye_mean = region_luma_mean(fb, left_eye_x0, eye_y0, left_eye_x1, eye_y1, 4);
+    float right_eye_mean = region_luma_mean(fb, right_eye_x0, eye_y0, right_eye_x1, eye_y1, 4);
+    float mouth_mean = region_luma_mean(fb, mouth_x0, mouth_y0, mouth_x1, mouth_y1, 4);
 
     face.eyeClosedLeft = safe_normalize(150.0f - left_eye_mean, 0.0f, 100.0f);
     face.eyeClosedRight = safe_normalize(150.0f - right_eye_mean, 0.0f, 100.0f);

@@ -35,7 +35,9 @@
 
 #define TRACKER_BACKEND_HEURISTIC 1
 #define TRACKER_BACKEND_ESP_WHO   2
-#define TRACKER_BACKEND           TRACKER_BACKEND_ESP_WHO
+#ifndef TRACKER_BACKEND
+  #define TRACKER_BACKEND           TRACKER_BACKEND_HEURISTIC
+#endif
 
 // ============================================================
 // Runtime Debug / Health Monitoring
@@ -45,10 +47,7 @@
 // ============================================================
 // WiFi Status LED
 // ============================================================
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 21
-#endif
-#define WIFI_STATUS_LED_PIN LED_BUILTIN
+#define WIFI_STATUS_LED_PIN 21
 #define WIFI_LED_BLINK_INTERVAL_MS 250
 
 // ============================================================
