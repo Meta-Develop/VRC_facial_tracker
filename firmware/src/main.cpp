@@ -1,20 +1,28 @@
 /**
  * VRC Facial Tracker - Main Entry Point
  *
- * Captures face images via OV2640 camera on XIAO ESP32S3 Sense,
- * performs facial landmark detection, and streams expression
- * parameters to VRChat over WiFi/OSC.
+ * Three operating modes (selected at compile time via TRACKER_BACKEND):
+ *
+ *   STREAM    — ESP32 acts as WiFi camera. PC app does MediaPipe
+ *               face mesh and sends OSC to VRChat. (default)
+ *   ESP_WHO   — On-device ESP-DL face detection (5-point keypoints).
+ *   HEURISTIC — Lightweight region-based analysis (no ML).
  */
 
 #include <Arduino.h>
 #include "config.h"
 #include "camera.h"
-#include "network.h"
-#include "tracker.h"
-#include "osc_sender.h"
 
-/* ESP-IDF + Arduino hybrid mode needs explicit app_main() entry point.
-   In pure Arduino mode, the framework provides this automatically. */
+#if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
+  #include "wifi_manager.h"
+  #include "stream_server.h"
+#else
+  #include "network.h"
+  #include "tracker.h"
+  #include "osc_sender.h"
+#endif
+
+/* ESP-IDF + Arduino hybrid mode needs explicit app_main() entry point. */
 #if defined(TRACKER_USE_ESP_DL)
 #ifdef __cplusplus
 extern "C" {
@@ -22,9 +30,7 @@ extern "C" {
 void app_main(void) {
     initArduino();
     setup();
-    for (;;) {
-        loop();
-    }
+    for (;;) { loop(); }
 }
 #ifdef __cplusplus
 }
@@ -33,15 +39,18 @@ void app_main(void) {
 
 static unsigned long stats_window_start_ms = 0;
 static uint32_t frames_in_window = 0;
-static uint32_t capture_fail_count = 0;
-static uint32_t face_detect_count = 0;
-static size_t last_frame_size_bytes = 0;
-static FaceData last_face = {};
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("VRC Facial Tracker - Initializing...");
+    Serial.println("=== VRC Facial Tracker ===");
+#if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
+    Serial.println("Mode: STREAM (PC-side processing)");
+#elif TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
+    Serial.println("Mode: ESP-DL (on-device face detection)");
+#else
+    Serial.println("Mode: HEURISTIC (on-device, no ML)");
+#endif
 
     // Initialize camera
     if (!camera_init()) {
@@ -51,85 +60,93 @@ void setup() {
     Serial.println("Camera initialized.");
 
     // Initialize WiFi
+#if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
+    // WiFi Manager: tries stored creds → compile-time creds → AP portal
+    bool wifi_ok = wifi_manager_init();
+    if (!wifi_ok) {
+        // AP portal is running — user needs to configure WiFi
+        // We still start camera + stream server once WiFi is set
+        Serial.println("Waiting for WiFi config via AP portal...");
+        while (wifi_manager_is_portal_active()) {
+            wifi_manager_loop();
+            delay(10);
+        }
+        // After portal saves creds, ESP reboots — but just in case:
+    }
+    Serial.printf("WiFi connected. IP: %s\n", wifi_manager_get_ip());
+
+    // Start MJPEG stream server
+    stream_server_start(STREAM_SERVER_PORT);
+    Serial.printf("Stream: http://%s:%d/stream\n",
+                  wifi_manager_get_ip(), STREAM_SERVER_PORT);
+    Serial.println("Waiting for PC app to connect...");
+#else
+    // On-device modes use simpler network module
     if (!network_init()) {
-        Serial.println("WARNING: WiFi connection failed. Running in offline mode.");
+        Serial.println("WARNING: WiFi failed. Running in offline mode.");
     } else {
-        Serial.println("WiFi connected.");
+        Serial.printf("WiFi connected. IP: %s\n", network_get_ip());
     }
 
-    // Initialize OSC sender
+    // Initialize OSC + tracker for on-device modes
     osc_init();
-    Serial.println("OSC sender initialized.");
-
-    // Initialize face tracker
     tracker_init();
-    Serial.printf("Face tracker initialized. Backend: %s\n", tracker_backend_name());
+    Serial.printf("Tracker backend: %s\n", tracker_backend_name());
+#endif
 
-    Serial.println("Setup complete. Starting tracking loop...");
+    Serial.println("Setup complete.");
     stats_window_start_ms = millis();
 }
 
 void loop() {
-    // Capture frame
-    camera_fb_t *fb = camera_capture();
-    if (!fb) {
-        capture_fail_count++;
-        return;
+#if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
+    // In stream mode, the HTTP server handles frame capture on its own thread.
+    // Main loop just maintains WiFi and prints stats.
+    wifi_manager_loop();
+
+    unsigned long now = millis();
+    unsigned long elapsed = now - stats_window_start_ms;
+    if (elapsed >= DEBUG_STATS_INTERVAL_MS) {
+        uint32_t served = stream_server_frame_count();
+        Serial.printf(
+            "[DBG] stream_frames=%lu clients=%d heap=%uB psram=%uB\n",
+            (unsigned long)served,
+            stream_server_has_clients() ? 1 : 0,
+            (unsigned int)ESP.getFreeHeap(),
+            (unsigned int)ESP.getFreePsram()
+        );
+        stats_window_start_ms = now;
     }
+    delay(100); // low duty — streaming runs in httpd task
+
+#else
+    // On-device inference mode (ESP_WHO or HEURISTIC)
+    camera_fb_t *fb = camera_capture();
+    if (!fb) { return; }
 
     frames_in_window++;
-    last_frame_size_bytes = fb->len;
 
-    // Run face tracking inference
     FaceData face = tracker_process(fb);
-
-    // Release frame buffer
     camera_release(fb);
 
-    if (face.detected) {
-        face_detect_count++;
-        last_face = face;
-    }
-
-    // Send tracking data via OSC if face detected and WiFi connected
     if (face.detected && network_is_connected()) {
         osc_send(face);
     }
 
-    // Maintain WiFi connection
     network_maintain();
 
     unsigned long now = millis();
     unsigned long elapsed = now - stats_window_start_ms;
     if (elapsed >= DEBUG_STATS_INTERVAL_MS) {
         float fps = (frames_in_window * 1000.0f) / (float)elapsed;
-        OscStats osc_stats = osc_get_stats();
-        float osc_msgs_per_sec = (osc_stats.interval_success * 1000.0f) / (float)elapsed;
-
         Serial.printf(
-            "[DBG] frame=%uB fps=%.1f cap_fail=%lu face=%lu/%lu heap=%uB psram=%uB osc_ok=%lu osc_fail=%lu\n",
-            (unsigned int)last_frame_size_bytes,
+            "[DBG] fps=%.1f heap=%uB psram=%uB\n",
             fps,
-            (unsigned long)capture_fail_count,
-            (unsigned long)face_detect_count,
-            (unsigned long)frames_in_window + face_detect_count,  // total frames in window before reset
             (unsigned int)ESP.getFreeHeap(),
-            (unsigned int)ESP.getFreePsram(),
-            (unsigned long)osc_stats.interval_success,
-            (unsigned long)osc_stats.interval_failure
+            (unsigned int)ESP.getFreePsram()
         );
-        if (last_face.detected) {
-            Serial.printf(
-                "  [FACE] eyeL=%.2f eyeR=%.2f mouth=%.2f jaw=%.2f smile=%.2f\n",
-                last_face.eyeClosedLeft, last_face.eyeClosedRight,
-                last_face.mouthOpen, last_face.jawOpen, last_face.mouthSmile
-            );
-        }
-
         frames_in_window = 0;
-        capture_fail_count = 0;
-        face_detect_count = 0;
         stats_window_start_ms = now;
-        osc_reset_interval_stats();
     }
+#endif
 }
