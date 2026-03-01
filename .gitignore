@@ -66,3 +66,10 @@ fp-info-cache
 *.zip
 
 firmware/sdkconfig.xiao_esp32s3_espidf
+firmware/sdkconfig.xiao_espidf
+
+# MediaPipe model (auto-downloaded)
+pc_app/models/
+
+# Python virtual environment
+.venv/

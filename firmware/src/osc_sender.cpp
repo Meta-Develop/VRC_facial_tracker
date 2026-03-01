@@ -2,8 +2,11 @@
  * VRC Facial Tracker - OSC Sender Module
  */
 
-#include "osc_sender.h"
 #include "config.h"
+
+#if TRACKER_BACKEND != TRACKER_BACKEND_STREAM
+
+#include "osc_sender.h"
 #include <WiFiUdp.h>
 #include <OSCMessage.h>
 
@@ -83,3 +86,5 @@ void osc_reset_interval_stats() {
     stats.interval_success = 0;
     stats.interval_failure = 0;
 }
+
+#endif // TRACKER_BACKEND != TRACKER_BACKEND_STREAM

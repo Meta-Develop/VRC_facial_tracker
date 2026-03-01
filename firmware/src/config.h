@@ -23,8 +23,13 @@
 // Camera Configuration
 // ============================================================
 #define CAMERA_FRAME_SIZE   FRAMESIZE_QVGA   // 320x240
-#define CAMERA_PIXEL_FORMAT PIXFORMAT_RGB565
-#define CAMERA_FB_COUNT     2                 // Frame buffer count
+#if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
+  #define CAMERA_PIXEL_FORMAT PIXFORMAT_JPEG   // JPEG for streaming efficiency
+  #define CAMERA_FB_COUNT     2
+#else
+  #define CAMERA_PIXEL_FORMAT PIXFORMAT_RGB565  // RGB565 for on-device inference
+  #define CAMERA_FB_COUNT     2
+#endif
 
 // ============================================================
 // Tracking Configuration
@@ -35,9 +40,15 @@
 
 #define TRACKER_BACKEND_HEURISTIC 1
 #define TRACKER_BACKEND_ESP_WHO   2
+#define TRACKER_BACKEND_STREAM    3   // PC-side processing via MJPEG stream
 #ifndef TRACKER_BACKEND
-  #define TRACKER_BACKEND           TRACKER_BACKEND_HEURISTIC
+  #define TRACKER_BACKEND           TRACKER_BACKEND_STREAM
 #endif
+
+// ============================================================
+// MJPEG Stream Server (for TRACKER_BACKEND_STREAM)
+// ============================================================
+#define STREAM_SERVER_PORT  81
 
 // ============================================================
 // Runtime Debug / Health Monitoring
