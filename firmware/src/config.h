@@ -34,6 +34,20 @@
 #define DETECTION_THRESHOLD 0.5f    // Face detection confidence threshold
 
 // ============================================================
+// Runtime Debug / Health Monitoring
+// ============================================================
+#define DEBUG_STATS_INTERVAL_MS 1000
+
+// ============================================================
+// WiFi Status LED
+// ============================================================
+#ifndef LED_BUILTIN
+#define LED_BUILTIN 21
+#endif
+#define WIFI_STATUS_LED_PIN LED_BUILTIN
+#define WIFI_LED_BLINK_INTERVAL_MS 250
+
+// ============================================================
 // Hardware Pins (XIAO ESP32S3 Sense - OV2640)
 // ============================================================
 #define PWDN_GPIO_NUM     -1
