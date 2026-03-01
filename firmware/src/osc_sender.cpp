@@ -8,6 +8,7 @@
 #include <OSCMessage.h>
 
 static WiFiUDP udp;
+static OscStats stats = {};
 
 void osc_init() {
     udp.begin(OSC_LOCAL_PORT);
@@ -17,13 +18,14 @@ void osc_init() {
 /**
  * Send a single float OSC parameter.
  */
-static void send_param(const char *address, float value) {
+static bool send_param(const char *address, float value) {
     OSCMessage msg(address);
     msg.add(value);
     udp.beginPacket(OSC_TARGET_IP, OSC_TARGET_PORT);
     msg.send(udp);
-    udp.endPacket();
+    bool ok = udp.endPacket() == 1;
     msg.empty();
+    return ok;
 }
 
 void osc_send(const FaceData &face) {
@@ -31,33 +33,53 @@ void osc_send(const FaceData &face) {
     // Reference: https://docs.vrchat.com/docs/osc-as-input-controller
 
     // Eyes
-    send_param("/avatar/parameters/EyeClosedLeft",    face.eyeClosedLeft);
-    send_param("/avatar/parameters/EyeClosedRight",   face.eyeClosedRight);
-    send_param("/avatar/parameters/EyeSquintLeft",     face.eyeSquintLeft);
-    send_param("/avatar/parameters/EyeSquintRight",    face.eyeSquintRight);
-    send_param("/avatar/parameters/EyeWideLeft",       face.eyeWideLeft);
-    send_param("/avatar/parameters/EyeWideRight",      face.eyeWideRight);
+    bool ok = true;
+
+    // Eyes
+    ok &= send_param("/avatar/parameters/EyeClosedLeft",    face.eyeClosedLeft);
+    ok &= send_param("/avatar/parameters/EyeClosedRight",   face.eyeClosedRight);
+    ok &= send_param("/avatar/parameters/EyeSquintLeft",     face.eyeSquintLeft);
+    ok &= send_param("/avatar/parameters/EyeSquintRight",    face.eyeSquintRight);
+    ok &= send_param("/avatar/parameters/EyeWideLeft",       face.eyeWideLeft);
+    ok &= send_param("/avatar/parameters/EyeWideRight",      face.eyeWideRight);
 
     // Eyebrows
-    send_param("/avatar/parameters/BrowUpLeft",        face.browUpLeft);
-    send_param("/avatar/parameters/BrowUpRight",       face.browUpRight);
-    send_param("/avatar/parameters/BrowDownLeft",      face.browDownLeft);
-    send_param("/avatar/parameters/BrowDownRight",     face.browDownRight);
+    ok &= send_param("/avatar/parameters/BrowUpLeft",        face.browUpLeft);
+    ok &= send_param("/avatar/parameters/BrowUpRight",       face.browUpRight);
+    ok &= send_param("/avatar/parameters/BrowDownLeft",      face.browDownLeft);
+    ok &= send_param("/avatar/parameters/BrowDownRight",     face.browDownRight);
 
     // Mouth
-    send_param("/avatar/parameters/MouthOpen",         face.mouthOpen);
-    send_param("/avatar/parameters/MouthSmile",        face.mouthSmile);
-    send_param("/avatar/parameters/MouthFrown",        face.mouthFrown);
-    send_param("/avatar/parameters/MouthPucker",       face.mouthPucker);
+    ok &= send_param("/avatar/parameters/MouthOpen",         face.mouthOpen);
+    ok &= send_param("/avatar/parameters/MouthSmile",        face.mouthSmile);
+    ok &= send_param("/avatar/parameters/MouthFrown",        face.mouthFrown);
+    ok &= send_param("/avatar/parameters/MouthPucker",       face.mouthPucker);
 
     // Jaw
-    send_param("/avatar/parameters/JawOpen",           face.jawOpen);
-    send_param("/avatar/parameters/JawLeft",           face.jawLeft);
-    send_param("/avatar/parameters/JawRight",          face.jawRight);
+    ok &= send_param("/avatar/parameters/JawOpen",           face.jawOpen);
+    ok &= send_param("/avatar/parameters/JawLeft",           face.jawLeft);
+    ok &= send_param("/avatar/parameters/JawRight",          face.jawRight);
 
     // Cheek
-    send_param("/avatar/parameters/CheekPuff",         face.cheekPuff);
+    ok &= send_param("/avatar/parameters/CheekPuff",         face.cheekPuff);
 
     // Tongue
-    send_param("/avatar/parameters/TongueOut",         face.tongueOut);
+    ok &= send_param("/avatar/parameters/TongueOut",         face.tongueOut);
+
+    if (ok) {
+        stats.total_success++;
+        stats.interval_success++;
+    } else {
+        stats.total_failure++;
+        stats.interval_failure++;
+    }
+}
+
+OscStats osc_get_stats() {
+    return stats;
+}
+
+void osc_reset_interval_stats() {
+    stats.interval_success = 0;
+    stats.interval_failure = 0;
 }
