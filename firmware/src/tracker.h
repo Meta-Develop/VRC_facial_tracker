@@ -56,3 +56,9 @@ void tracker_init();
  * @return FaceData with expression parameters.
  */
 FaceData tracker_process(camera_fb_t *fb);
+
+/**
+ * Get current tracker backend name.
+ * @return Backend identifier string.
+ */
+const char *tracker_backend_name();
