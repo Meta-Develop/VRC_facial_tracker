@@ -1,0 +1,66 @@
+# Build Directories
+build/
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Agent workspace (private, not for public repo)
+.agent/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+venv/
+.env
+
+# C/C++ Build artifacts
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+*.lst
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local documentation
+project_docs/
+task.md
+.documentation/
+
+# Temp files
+*.log
+*.bak
+*.tmp
+temp_*
+debug_*
+
+# ESP-IDF
+sdkconfig.old
+dependencies.lock
+managed_components/
+
+# KiCad backups
+*-backups/
+*.kicad_prl
+fp-info-cache
+
+# Archives
+*.tar.gz
+*.zip
