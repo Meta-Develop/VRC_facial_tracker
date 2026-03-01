@@ -6,14 +6,18 @@ An open-source facial tracking device for VRChat, built with the Seeed Studio XI
 
 This project provides a low-cost, DIY facial tracking solution compatible with VRChat's OSC (Open Sound Control) protocol. It captures facial expressions via the onboard camera of the XIAO ESP32S3 Sense and streams tracking data wirelessly to VRChat.
 
+**Current Status:** Hardware-verified — ESP-DL face detection running at **14.8 fps** on real device.
+
 ## Features
 
-- **Real-time facial expression tracking** using the ESP32S3 onboard camera
-- **Wireless streaming** over WiFi via OSC protocol
-- **VRChat native support** through OSC face tracking parameters
-- **Compact design** suitable for mounting on VR headsets
-- **Low latency** optimized for real-time avatar expression mirroring
-- **Open hardware** — full schematics and 3D-printable mount designs included
+- **ESP-DL face detection** — neural network inference on-device (HumanFaceDetectMSR01)
+- **5-point keypoint tracking** — eyes, nose, mouth corners for expression extraction
+- **14.8 fps real-time** — camera capture + inference pipeline
+- **Wireless streaming** over WiFi via OSC protocol to VRChat
+- **Dual build modes** — ESP-IDF+Arduino hybrid (ESP-DL) or Arduino-only (heuristic fallback)
+- **Offline mode** — runs without WiFi for standalone testing
+- **8MB PSRAM** — OPI 80MHz for frame buffers and model storage
+- **240MHz ESP32-S3** — optimized cache configuration (64KB / 8-way / 64B line)
 
 ## Hardware
 
@@ -21,9 +25,9 @@ This project provides a low-cost, DIY facial tracking solution compatible with V
 
 | Component | Description |
 |-----------|-------------|
-| Seeed Studio XIAO ESP32S3 Sense | Main MCU with OV2640 camera |
+| Seeed Studio XIAO ESP32S3 Sense | ESP32-S3R8 MCU + OV3660 camera, 8MB Flash, 8MB PSRAM |
 | 3D Printed Mount | Headset-specific mounting bracket |
-| USB-C Cable | For initial flashing and power |
+| USB-C Cable | For flashing, power, and serial debug |
 
 ### Supported VR Headsets
 
@@ -34,11 +38,14 @@ This project provides a low-cost, DIY facial tracking solution compatible with V
 ## System Architecture
 
 ```
-ESP32S3 (Camera + ML Inference)
+XIAO ESP32S3 Sense (Camera + ESP-DL Inference)
     │
-    ├── OV2640 Camera Capture
-    ├── Face Detection & Landmark Extraction
-    ├── Expression Parameter Calculation
+    ├── OV3660 Camera Capture (QVGA 320x240 RGB565, 24MHz XCLK)
+    ├── ESP-DL Face Detection (HumanFaceDetectMSR01)
+    ├── 5-Point Keypoint → Expression Parameter Extraction
+    │   ├── eyeClosedLeft / eyeClosedRight
+    │   ├── mouthOpen / jawOpen
+    │   └── mouthSmile
     │
     └── WiFi OSC Transmission
             │
@@ -95,43 +102,41 @@ The tracker sends the following face tracking parameters:
 | `EyeClosedLeft` | 0.0 - 1.0 | Left eye closure |
 | `EyeClosedRight` | 0.0 - 1.0 | Right eye closure |
 | `MouthOpen` | 0.0 - 1.0 | Mouth opening |
-| `MouthSmile` | 0.0 - 1.0 | Smile intensity |
-| `BrowUpLeft` | 0.0 - 1.0 | Left eyebrow raise |
-| `BrowUpRight` | 0.0 - 1.0 | Right eyebrow raise |
-| `CheekPuff` | 0.0 - 1.0 | Cheek puff |
-| `TongueOut` | 0.0 - 1.0 | Tongue extension |
 | `JawOpen` | 0.0 - 1.0 | Jaw opening |
+| `MouthSmile` | 0.0 - 1.0 | Smile intensity |
 
 > Full parameter list and avatar setup guide available in [`docs/PARAMETERS.md`](docs/PARAMETERS.md).
 
 ## Build & Flash
 
 ```bash
-# Using PlatformIO CLI
+# ESP-DL face detection (recommended — requires ESP-IDF+Arduino hybrid)
 cd firmware
-pio run -t upload
+pio run -e xiao_esp32s3_espidf -t upload
+
+# Arduino-only fallback (heuristic backend, simpler build)
+pio run -e xiao_esp32s3 -t upload
 
 # Monitor serial output
 pio device monitor
 ```
 
-## Calibration
+### Build Stats
 
-After flashing, the device enters calibration mode on first boot:
-
-1. Face the camera directly with a neutral expression
-2. Press the reset button to capture baseline
-3. The device saves calibration data to flash memory
-4. Subsequent boots use saved calibration
+| Environment | Backend | RAM | Flash | FPS |
+|-------------|---------|-----|-------|-----|
+| `xiao_esp32s3_espidf` | ESP-DL | 14.2% | 39.5% | 14.8 |
+| `xiao_esp32s3` | Heuristic | 15.0% | 23.6% | 14.8 |
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| No WiFi connection | Check SSID/password in config.h |
+| No WiFi connection | Check SSID/password in `config.h` |
 | No tracking in VRChat | Ensure OSC is enabled in VRChat settings |
-| Laggy tracking | Reduce inference resolution in config |
 | Camera not detected | Verify XIAO ESP32S3 **Sense** variant is used |
+| PSRAM allocation failed | Use `sdkconfig.defaults` with `CONFIG_ESP32S3_SPIRAM_SUPPORT=y` |
+| Build fails (ESP-IDF) | Run `pio run -e xiao_esp32s3` for Arduino-only fallback |
 
 ## Contributing
 
@@ -143,6 +148,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
+- [Espressif ESP-DL](https://github.com/espressif/esp-dl) — on-device face detection model
 - [VRChat OSC Documentation](https://docs.vrchat.com/docs/osc-overview)
 - [Seeed Studio XIAO ESP32S3 Sense](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
-- [MediaPipe Face Mesh](https://developers.google.com/mediapipe/solutions/vision/face_landmarker)
+- [PlatformIO](https://platformio.org/) — build system
