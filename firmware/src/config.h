@@ -35,7 +35,7 @@
 
 #define TRACKER_BACKEND_HEURISTIC 1
 #define TRACKER_BACKEND_ESP_WHO   2
-#define TRACKER_BACKEND           TRACKER_BACKEND_HEURISTIC
+#define TRACKER_BACKEND           TRACKER_BACKEND_ESP_WHO
 
 // ============================================================
 // Runtime Debug / Health Monitoring
