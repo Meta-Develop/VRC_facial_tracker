@@ -8,7 +8,7 @@
 #include <WiFi.h>
 
 static unsigned long lastReconnectAttempt = 0;
-static const unsigned long RECONNECT_INTERVAL_MS = 5000;
+static const unsigned long RECONNECT_INTERVAL_MS = 15000;
 static unsigned long lastLedToggleMs = 0;
 static bool ledBlinkState = false;
 static bool reconnecting = false;
