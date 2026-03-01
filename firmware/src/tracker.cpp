@@ -13,6 +13,17 @@
 #include <Arduino.h>
 #include <math.h>
 
+#if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
+#if defined(__has_include)
+#if __has_include("fd_forward.h") && __has_include("dl_lib.h") && __has_include("img_converters.h")
+#define TRACKER_ESP_WHO_LEGACY_API 1
+#include "fd_forward.h"
+#include "dl_lib.h"
+#include "img_converters.h"
+#endif
+#endif
+#endif
+
 static FaceData smoothed_face = {};
 
 #if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
@@ -186,6 +197,59 @@ const char *tracker_backend_name() {
 
 #if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
 static bool esp_who_warning_printed = false;
+#if defined(TRACKER_ESP_WHO_LEGACY_API)
+static bool esp_who_legacy_api_warning_printed = false;
+#endif
+#endif
+
+#if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO && defined(TRACKER_ESP_WHO_LEGACY_API)
+static bool detect_with_esp_who_legacy(camera_fb_t *fb, bool *detected, float *confidence) {
+    if (!fb || !detected || !confidence) {
+        return false;
+    }
+
+    *detected = false;
+    *confidence = 0.0f;
+
+    dl_matrix3du_t *image_matrix = dl_matrix3du_alloc(1, fb->width, fb->height, 3);
+    if (!image_matrix) {
+        return false;
+    }
+
+    bool converted = fmt2rgb888(fb->buf, fb->len, fb->format, image_matrix->item);
+    if (!converted) {
+        dl_matrix3du_free(image_matrix);
+        return false;
+    }
+
+    mtmn_config_t config = {};
+    box_array_t *boxes = face_detect(image_matrix, &config);
+    dl_matrix3du_free(image_matrix);
+
+    if (!boxes) {
+        return true;
+    }
+
+    if (boxes->len > 0) {
+        *detected = true;
+        if (boxes->score) {
+            *confidence = boxes->score[0];
+        }
+    }
+
+    if (boxes->score) {
+        free(boxes->score);
+    }
+    if (boxes->box) {
+        free(boxes->box);
+    }
+    if (boxes->landmark) {
+        free(boxes->landmark);
+    }
+    free(boxes);
+
+    return true;
+}
 #endif
 
 static FaceData tracker_process_heuristic(camera_fb_t *fb) {
@@ -288,11 +352,31 @@ FaceData tracker_process(camera_fb_t *fb) {
     }
 
 #if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
+    #if defined(TRACKER_ESP_WHO_LEGACY_API)
+    bool detected = false;
+    float confidence = 0.0f;
+    bool infer_ok = detect_with_esp_who_legacy(fb, &detected, &confidence);
+
+    if (infer_ok) {
+        FaceData face = tracker_process_heuristic(fb);
+        if (!detected) {
+            face.detected = false;
+        }
+        return face;
+    }
+
+    if (!esp_who_legacy_api_warning_printed) {
+        Serial.println("Tracker: ESP-WHO legacy API was found, but inference failed. Falling back to heuristic backend.");
+        esp_who_legacy_api_warning_printed = true;
+    }
+    return tracker_process_heuristic(fb);
+    #else
     if (!esp_who_warning_printed) {
-        Serial.println("Tracker: ESP-WHO backend selected, but model integration is not linked in this build. Falling back to heuristic backend.");
+        Serial.println("Tracker: ESP-WHO backend selected, but compatible headers were not found in this build. Falling back to heuristic backend.");
         esp_who_warning_printed = true;
     }
     return tracker_process_heuristic(fb);
+    #endif
 #else
     return tracker_process_heuristic(fb);
 #endif
