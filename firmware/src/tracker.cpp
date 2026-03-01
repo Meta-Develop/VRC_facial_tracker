@@ -1,11 +1,12 @@
 /**
  * VRC Facial Tracker - Face Tracking Module
  *
- * Phase 2 tracker backend implementation.
+ * Supports two backends selected at compile time via TRACKER_BACKEND:
  *
- * Backend strategy:
- * - ESP-WHO backend can be enabled when full dependency stack is available.
- * - Heuristic backend is kept as a robust fallback for Arduino-only builds.
+ *   TRACKER_BACKEND_HEURISTIC — lightweight region-based analysis (no ML).
+ *   TRACKER_BACKEND_ESP_WHO   — ESP-DL face detection with keypoint
+ *                                expression extraction; falls back to
+ *                                heuristic when headers are unavailable.
  */
 
 #include "tracker.h"
@@ -13,24 +14,50 @@
 #include <Arduino.h>
 #include <math.h>
 
+// ---------------------------------------------------------------------------
+// ESP-DL header detection (modern ESP-WHO / esp-dl for ESP32-S3)
+// ---------------------------------------------------------------------------
 #if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
-#if defined(__has_include)
-#if __has_include("fd_forward.h") && __has_include("dl_lib.h") && __has_include("img_converters.h")
-#define TRACKER_ESP_WHO_LEGACY_API 1
-#include "fd_forward.h"
-#include "dl_lib.h"
-#include "img_converters.h"
-#endif
-#endif
+  #if defined(__has_include)
+    #if __has_include("human_face_detect_msr01.hpp")
+      #define TRACKER_HAS_ESP_DL 1
+      #include "human_face_detect_msr01.hpp"
+      #include <list>
+    #endif
+  #endif
 #endif
 
 static FaceData smoothed_face = {};
 
+// ---------------------------------------------------------------------------
+// Backend label
+// ---------------------------------------------------------------------------
 #if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
-#define TRACKER_BACKEND_LABEL "esp-who"
+  #if defined(TRACKER_HAS_ESP_DL)
+    #define TRACKER_BACKEND_LABEL "esp-who"
+  #else
+    #define TRACKER_BACKEND_LABEL "esp-who (fallback: heuristic)"
+  #endif
 #else
-#define TRACKER_BACKEND_LABEL "heuristic"
+  #define TRACKER_BACKEND_LABEL "heuristic"
 #endif
+
+// ---------------------------------------------------------------------------
+// ESP-DL detector instance
+// ---------------------------------------------------------------------------
+#if defined(TRACKER_HAS_ESP_DL)
+static HumanFaceDetectMSR01 *s_detector = nullptr;
+#endif
+
+// ---------------------------------------------------------------------------
+// Fallback warning flag
+// ---------------------------------------------------------------------------
+#if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO && !defined(TRACKER_HAS_ESP_DL)
+static bool esp_who_fallback_warned = false;
+#endif
+
+// Forward declaration (heuristic backend used as fallback in ESP-DL path)
+static FaceData tracker_process_heuristic(camera_fb_t *fb);
 
 typedef struct {
     float luma;
@@ -188,6 +215,15 @@ static float region_saturation_mean(const camera_fb_t *fb, int x0, int y0, int x
 
 void tracker_init() {
     smoothed_face = {};
+#if defined(TRACKER_HAS_ESP_DL)
+    // MSR01 params: score_threshold, nms_threshold, top_k, resize_scale
+    s_detector = new HumanFaceDetectMSR01(0.3F, 0.5F, 10, 0.2F);
+    if (s_detector) {
+        Serial.println("Tracker: ESP-DL face detector allocated");
+    } else {
+        Serial.println("Tracker: WARNING - failed to allocate face detector");
+    }
+#endif
     Serial.printf("Tracker: Initialized (%s backend)\n", TRACKER_BACKEND_LABEL);
 }
 
@@ -195,62 +231,85 @@ const char *tracker_backend_name() {
     return TRACKER_BACKEND_LABEL;
 }
 
-#if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
-static bool esp_who_warning_printed = false;
-#if defined(TRACKER_ESP_WHO_LEGACY_API)
-static bool esp_who_legacy_api_warning_printed = false;
-#endif
-#endif
+// ---------------------------------------------------------------------------
+// ESP-DL face detection backend
+// ---------------------------------------------------------------------------
+#if defined(TRACKER_HAS_ESP_DL)
 
-#if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO && defined(TRACKER_ESP_WHO_LEGACY_API)
-static bool detect_with_esp_who_legacy(camera_fb_t *fb, bool *detected, float *confidence) {
-    if (!fb || !detected || !confidence) {
-        return false;
+static FaceData tracker_process_esp_who(camera_fb_t *fb) {
+    FaceData face = {};
+
+    // ESP-DL expects RGB565 input
+    if (!s_detector || fb->format != PIXFORMAT_RGB565) {
+        return tracker_process_heuristic(fb);
     }
 
-    *detected = false;
-    *confidence = 0.0f;
+    std::list<dl::detect::result_t> results =
+        s_detector->infer((uint16_t *)fb->buf,
+                          {(int)fb->height, (int)fb->width, 3});
 
-    dl_matrix3du_t *image_matrix = dl_matrix3du_alloc(1, fb->width, fb->height, 3);
-    if (!image_matrix) {
-        return false;
+    if (results.empty()) {
+        smoothed_face.detected = false;
+        return smoothed_face;
     }
 
-    bool converted = fmt2rgb888(fb->buf, fb->len, fb->format, image_matrix->item);
-    if (!converted) {
-        dl_matrix3du_free(image_matrix);
-        return false;
-    }
-
-    mtmn_config_t config = {};
-    box_array_t *boxes = face_detect(image_matrix, &config);
-    dl_matrix3du_free(image_matrix);
-
-    if (!boxes) {
-        return true;
-    }
-
-    if (boxes->len > 0) {
-        *detected = true;
-        if (boxes->score) {
-            *confidence = boxes->score[0];
+    // Pick the highest-confidence detection
+    auto best = results.begin();
+    for (auto it = results.begin(); it != results.end(); ++it) {
+        if (it->score > best->score) {
+            best = it;
         }
     }
 
-    if (boxes->score) {
-        free(boxes->score);
-    }
-    if (boxes->box) {
-        free(boxes->box);
-    }
-    if (boxes->landmark) {
-        free(boxes->landmark);
-    }
-    free(boxes);
+    face.detected = true;
 
-    return true;
+    // Extract expression parameters from 5-point keypoints
+    // Layout: [left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+    //          nose_x, nose_y, mouth_left_x, mouth_left_y,
+    //          mouth_right_x, mouth_right_y]
+    if (best->keypoint.size() >= 10) {
+        int box_w = best->box[2] - best->box[0];
+        int box_h = best->box[3] - best->box[1];
+        if (box_w <= 0) box_w = 1;
+        if (box_h <= 0) box_h = 1;
+
+        // Eye vertical position relative to face box
+        float left_eye_rel  = (float)(best->keypoint[1] - best->box[1]) / box_h;
+        float right_eye_rel = (float)(best->keypoint[3] - best->box[1]) / box_h;
+
+        // Mouth width relative to face width
+        float mouth_w = (float)abs(best->keypoint[8] - best->keypoint[6]);
+        float mouth_ratio = mouth_w / (float)box_w;
+
+        // Nose-to-mouth-center vertical distance for jaw estimation
+        float mouth_cy = (best->keypoint[7] + best->keypoint[9]) / 2.0f;
+        float jaw_dist = (mouth_cy - best->keypoint[5]) / (float)box_h;
+
+        // Mouth corner vertical offset for smile estimation
+        float mouth_left_y  = (float)(best->keypoint[7] - best->box[1]) / box_h;
+        float mouth_right_y = (float)(best->keypoint[9] - best->box[1]) / box_h;
+        float nose_rel_y    = (float)(best->keypoint[5] - best->box[1]) / box_h;
+        float mouth_uplift  = nose_rel_y - ((mouth_left_y + mouth_right_y) / 2.0f);
+
+        face.eyeClosedLeft  = clamp01(1.0f - safe_normalize(left_eye_rel, 0.20f, 0.40f));
+        face.eyeClosedRight = clamp01(1.0f - safe_normalize(right_eye_rel, 0.20f, 0.40f));
+        face.mouthOpen      = safe_normalize(mouth_ratio, 0.25f, 0.55f);
+        face.jawOpen         = safe_normalize(jaw_dist, 0.15f, 0.35f);
+        face.mouthSmile      = clamp01(safe_normalize(mouth_uplift, -0.05f, 0.08f));
+    }
+
+    // Smoothing
+    smoothed_face.detected      = true;
+    smoothed_face.eyeClosedLeft  += SMOOTHING_FACTOR * (face.eyeClosedLeft  - smoothed_face.eyeClosedLeft);
+    smoothed_face.eyeClosedRight += SMOOTHING_FACTOR * (face.eyeClosedRight - smoothed_face.eyeClosedRight);
+    smoothed_face.mouthOpen      += SMOOTHING_FACTOR * (face.mouthOpen      - smoothed_face.mouthOpen);
+    smoothed_face.jawOpen        += SMOOTHING_FACTOR * (face.jawOpen        - smoothed_face.jawOpen);
+    smoothed_face.mouthSmile     += SMOOTHING_FACTOR * (face.mouthSmile     - smoothed_face.mouthSmile);
+
+    return smoothed_face;
 }
-#endif
+
+#endif // TRACKER_HAS_ESP_DL
 
 static FaceData tracker_process_heuristic(camera_fb_t *fb) {
     FaceData face = {};
@@ -352,28 +411,12 @@ FaceData tracker_process(camera_fb_t *fb) {
     }
 
 #if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
-    #if defined(TRACKER_ESP_WHO_LEGACY_API)
-    bool detected = false;
-    float confidence = 0.0f;
-    bool infer_ok = detect_with_esp_who_legacy(fb, &detected, &confidence);
-
-    if (infer_ok) {
-        FaceData face = tracker_process_heuristic(fb);
-        if (!detected) {
-            face.detected = false;
-        }
-        return face;
-    }
-
-    if (!esp_who_legacy_api_warning_printed) {
-        Serial.println("Tracker: ESP-WHO legacy API was found, but inference failed. Falling back to heuristic backend.");
-        esp_who_legacy_api_warning_printed = true;
-    }
-    return tracker_process_heuristic(fb);
+    #if defined(TRACKER_HAS_ESP_DL)
+    return tracker_process_esp_who(fb);
     #else
-    if (!esp_who_warning_printed) {
-        Serial.println("Tracker: ESP-WHO backend selected, but compatible headers were not found in this build. Falling back to heuristic backend.");
-        esp_who_warning_printed = true;
+    if (!esp_who_fallback_warned) {
+        Serial.println("Tracker: ESP-WHO selected but esp-dl headers not found. Using heuristic fallback.");
+        esp_who_fallback_warned = true;
     }
     return tracker_process_heuristic(fb);
     #endif
