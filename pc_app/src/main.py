@@ -67,55 +67,7 @@ def ensure_model() -> str:
     return MODEL_PATH
 
 
-# ---------------------------------------------------------------------------
-# ARKit blend shape → VRChat OSC parameter mapping
-# ---------------------------------------------------------------------------
-# MediaPipe FaceLandmarker outputs 52 ARKit-compatible blend shapes.
-# We map the useful ones to VRChat avatar parameter names.
-BLENDSHAPE_TO_VRC = {
-    "eyeBlinkLeft":     "EyeClosedLeft",
-    "eyeBlinkRight":    "EyeClosedRight",
-    "eyeWideLeft":      "EyeWideLeft",
-    "eyeWideRight":     "EyeWideRight",
-    "eyeSquintLeft":    "EyeSquintLeft",
-    "eyeSquintRight":   "EyeSquintRight",
-    "eyeLookUpLeft":    "EyeLookUpLeft",
-    "eyeLookUpRight":   "EyeLookUpRight",
-    "eyeLookDownLeft":  "EyeLookDownLeft",
-    "eyeLookDownRight": "EyeLookDownRight",
-    "eyeLookInLeft":    "EyeLookInLeft",
-    "eyeLookInRight":   "EyeLookInRight",
-    "eyeLookOutLeft":   "EyeLookOutLeft",
-    "eyeLookOutRight":  "EyeLookOutRight",
-    "browDownLeft":     "BrowDownLeft",
-    "browDownRight":    "BrowDownRight",
-    "browInnerUp":      "BrowInnerUp",
-    "browOuterUpLeft":  "BrowOuterUpLeft",
-    "browOuterUpRight": "BrowOuterUpRight",
-    "mouthSmileLeft":   "MouthSmileLeft",
-    "mouthSmileRight":  "MouthSmileRight",
-    "mouthFrownLeft":   "MouthFrownLeft",
-    "mouthFrownRight":  "MouthFrownRight",
-    "mouthPucker":      "MouthPucker",
-    "mouthLeft":        "MouthLeft",
-    "mouthRight":       "MouthRight",
-    "mouthFunnel":      "MouthFunnel",
-    "mouthShrugUpper":  "MouthShrugUpper",
-    "mouthShrugLower":  "MouthShrugLower",
-    "jawOpen":          "JawOpen",
-    "jawLeft":          "JawLeft",
-    "jawRight":         "JawRight",
-    "jawForward":       "JawForward",
-    "cheekPuff":        "CheekPuff",
-    "cheekSquintLeft":  "CheekSquintLeft",
-    "cheekSquintRight": "CheekSquintRight",
-    "tongueOut":        "TongueOut",
-    "noseSneerLeft":    "NoseSneerLeft",
-    "noseSneerRight":   "NoseSneerRight",
-}
-
-# VRChat OSC address prefix
-OSC_PREFIX = "/avatar/parameters/"
+# Blend shape mapping is centralized in osc_sender.py
 
 
 # ---------------------------------------------------------------------------
@@ -348,10 +300,7 @@ def main() -> None:
                 blend_shapes = smoother.smooth(raw_dict)
 
                 # Send OSC
-                for bs_name, vrc_name in BLENDSHAPE_TO_VRC.items():
-                    val = blend_shapes.get(bs_name, 0.0)
-                    osc._client.send_message(OSC_PREFIX + vrc_name, float(val))
-                osc._sent += 1
+                osc.send_blendshapes(blend_shapes)
 
                 # Draw
                 if not args.no_preview:
