@@ -43,7 +43,7 @@ void setup() {
 
     // Initialize face tracker
     tracker_init();
-    Serial.println("Face tracker initialized.");
+    Serial.printf("Face tracker initialized. Backend: %s\n", tracker_backend_name());
 
     Serial.println("Setup complete. Starting tracking loop...");
     stats_window_start_ms = millis();
