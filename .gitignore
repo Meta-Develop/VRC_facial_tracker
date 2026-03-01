@@ -64,3 +64,5 @@ fp-info-cache
 # Archives
 *.tar.gz
 *.zip
+
+firmware/sdkconfig.xiao_esp32s3_espidf
