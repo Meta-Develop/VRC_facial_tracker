@@ -23,7 +23,7 @@
 // Camera Configuration
 // ============================================================
 #define CAMERA_FRAME_SIZE   FRAMESIZE_QVGA   // 320x240
-#define CAMERA_PIXEL_FORMAT PIXFORMAT_GRAYSCALE
+#define CAMERA_PIXEL_FORMAT PIXFORMAT_RGB565
 #define CAMERA_FB_COUNT     2                 // Frame buffer count
 
 // ============================================================
@@ -32,6 +32,10 @@
 #define TRACKING_FPS        30      // Target tracking framerate
 #define SMOOTHING_FACTOR    0.3f    // Expression smoothing (0-1, lower = smoother)
 #define DETECTION_THRESHOLD 0.5f    // Face detection confidence threshold
+
+#define TRACKER_BACKEND_HEURISTIC 1
+#define TRACKER_BACKEND_ESP_WHO   2
+#define TRACKER_BACKEND           TRACKER_BACKEND_HEURISTIC
 
 // ============================================================
 // Runtime Debug / Health Monitoring
