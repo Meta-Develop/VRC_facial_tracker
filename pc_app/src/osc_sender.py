@@ -26,14 +26,9 @@ BLENDSHAPE_TO_VRC: dict[str, str] = {
     "eyeWideRight":     "EyeWideRight",
     "eyeSquintLeft":    "EyeSquintLeft",
     "eyeSquintRight":   "EyeSquintRight",
-    "eyeLookUpLeft":    "EyeLookUpLeft",
-    "eyeLookUpRight":   "EyeLookUpRight",
-    "eyeLookDownLeft":  "EyeLookDownLeft",
-    "eyeLookDownRight": "EyeLookDownRight",
-    "eyeLookInLeft":    "EyeLookInLeft",
-    "eyeLookInRight":   "EyeLookInRight",
-    "eyeLookOutLeft":   "EyeLookOutLeft",
-    "eyeLookOutRight":  "EyeLookOutRight",
+    # eyeLook* params removed — camera is mounted under VR headset,
+    # so iris tracking is impossible.  Blink/wide/squint may still
+    # partially work from the lower-face view.
     "browDownLeft":     "BrowDownLeft",
     "browDownRight":    "BrowDownRight",
     "browInnerUp":      "BrowInnerUp",
