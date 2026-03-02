@@ -29,7 +29,7 @@ bool camera_init() {
     config.xclk_freq_hz = 24000000;
     config.pixel_format = CAMERA_PIXEL_FORMAT;
     config.frame_size   = CAMERA_FRAME_SIZE;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = CAMERA_JPEG_QUALITY;
     config.fb_count     = CAMERA_FB_COUNT;
     config.fb_location  = CAMERA_FB_IN_PSRAM;
     config.grab_mode    = CAMERA_GRAB_LATEST;

@@ -25,9 +25,13 @@
 #define CAMERA_FRAME_SIZE   FRAMESIZE_QVGA   // 320x240
 #if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
   #define CAMERA_PIXEL_FORMAT PIXFORMAT_JPEG   // JPEG for streaming efficiency
+  #define CAMERA_JPEG_QUALITY 20               // 0-63 (lower = better quality, bigger file)
+                                               // 12 = high quality ~12KB, 20 = medium ~6KB
+                                               // 30 = low ~3KB. 20 is good for face tracking.
   #define CAMERA_FB_COUNT     2
 #else
   #define CAMERA_PIXEL_FORMAT PIXFORMAT_RGB565  // RGB565 for on-device inference
+  #define CAMERA_JPEG_QUALITY 12
   #define CAMERA_FB_COUNT     2
 #endif
 
@@ -46,9 +50,10 @@
 #endif
 
 // ============================================================
-// MJPEG Stream Server (for TRACKER_BACKEND_STREAM)
+// UDP Stream (for TRACKER_BACKEND_STREAM)
 // ============================================================
-#define STREAM_SERVER_PORT  81
+#define UDP_STREAM_PORT     5555              // PC sends register/heartbeat here
+#define STREAM_SERVER_PORT  81                // (legacy HTTP, unused)
 
 // ============================================================
 // Runtime Debug / Health Monitoring

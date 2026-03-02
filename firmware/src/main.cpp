@@ -15,7 +15,7 @@
 
 #if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
   #include "wifi_manager.h"
-  #include "stream_server.h"
+  #include "udp_stream.h"
 #else
   #include "network.h"
   #include "tracker.h"
@@ -75,10 +75,10 @@ void setup() {
     }
     Serial.printf("WiFi connected. IP: %s\n", wifi_manager_get_ip());
 
-    // Start MJPEG stream server
-    stream_server_start(STREAM_SERVER_PORT);
-    Serial.printf("Stream: http://%s:%d/stream\n",
-                  wifi_manager_get_ip(), STREAM_SERVER_PORT);
+    // Start UDP frame streamer
+    udp_stream_start(UDP_STREAM_PORT);
+    Serial.printf("UDP stream: port %d (send REGISTER to start)\n",
+                  UDP_STREAM_PORT);
     Serial.println("Waiting for PC app to connect...");
 #else
     // On-device modes use simpler network module
@@ -107,17 +107,17 @@ void loop() {
     unsigned long now = millis();
     unsigned long elapsed = now - stats_window_start_ms;
     if (elapsed >= DEBUG_STATS_INTERVAL_MS) {
-        uint32_t served = stream_server_frame_count();
         Serial.printf(
-            "[DBG] stream_frames=%lu clients=%d heap=%uB psram=%uB\n",
-            (unsigned long)served,
-            stream_server_has_clients() ? 1 : 0,
+            "[DBG] udp_fps=%.1f frames=%lu peer=%d heap=%uB psram=%uB\n",
+            udp_stream_fps(),
+            (unsigned long)udp_stream_frame_count(),
+            udp_stream_has_peer() ? 1 : 0,
             (unsigned int)ESP.getFreeHeap(),
             (unsigned int)ESP.getFreePsram()
         );
         stats_window_start_ms = now;
     }
-    delay(100); // low duty — streaming runs in httpd task
+    delay(100); // low duty — streaming runs in dedicated task
 
 #else
     // On-device inference mode (ESP_WHO or HEURISTIC)

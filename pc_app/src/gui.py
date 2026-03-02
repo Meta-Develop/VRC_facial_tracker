@@ -97,13 +97,19 @@ class TrackerThread(threading.Thread):
             self.running = False
             return
 
-        # Video source
-        cap = cv2.VideoCapture(self.source)
-        if not cap.isOpened():
-            self.error = f"Cannot open: {self.source}"
-            self.running = False
-            return
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # Video source — use UdpReceiver for ESP32 IP, cv2 for webcam/HTTP
+        use_udp = False
+        if isinstance(self.source, str) and not self.source.startswith('http'):
+            from .udp_receiver import UdpReceiver
+            cap = UdpReceiver(self.source)
+            use_udp = True
+        else:
+            cap = cv2.VideoCapture(self.source)
+            if not cap.isOpened():
+                self.error = f"Cannot open: {self.source}"
+                self.running = False
+                return
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         # FaceLandmarker
         base_options = mp.tasks.BaseOptions(model_asset_path=model_path)
@@ -119,7 +125,7 @@ class TrackerThread(threading.Thread):
         )
         landmarker = FaceLandmarker.create_from_options(options)
 
-        timestamp_ms = 0
+        _t0_mono = time.monotonic()
         last_time = time.time()
         fps_alpha = 0.1
 
@@ -127,8 +133,11 @@ class TrackerThread(threading.Thread):
             while self.running:
                 ret, frame = cap.read()
                 if not ret:
-                    if isinstance(self.source, str):
-                        # MJPEG reconnect
+                    if use_udp:
+                        # UDP: no frame yet, just retry
+                        continue
+                    elif isinstance(self.source, str):
+                        # HTTP MJPEG reconnect
                         cap.release()
                         time.sleep(1.0)
                         cap = cv2.VideoCapture(self.source)
@@ -140,7 +149,7 @@ class TrackerThread(threading.Thread):
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                timestamp_ms += 33
+                timestamp_ms = int((time.monotonic() - _t0_mono) * 1000)
 
                 result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
@@ -169,8 +178,7 @@ class TrackerThread(threading.Thread):
                     self.blend_shapes = bs_dict
                     self.face_detected = face_ok
 
-                # ~30fps pacing
-                time.sleep(max(0, 0.033 - dt))
+                # No artificial sleep — run as fast as the source provides
 
         finally:
             cap.release()
@@ -269,7 +277,7 @@ class App(tk.Tk):
 
         # Hint
         hint = ttk.Label(settings,
-                          text="Webcam: 0  |  ESP32: http://IP:81/stream",
+                          text="Webcam: 0  |  ESP32: 192.168.x.x (UDP)",
                           style="Dark.TLabel")
         hint.pack(padx=8, pady=(0, 3))
 
@@ -385,15 +393,19 @@ class App(tk.Tk):
     def _start_tracking(self):
         source_str = self._source_var.get().strip()
 
-        # Parse source: int = webcam, string = URL
+        # Parse source: int = webcam, string = IP or URL
         try:
             source = int(source_str)
         except ValueError:
             source = source_str
-            if not source.startswith("http"):
+            # Accept IP addresses (UDP) and http:// URLs (legacy HTTP)
+            if not (source.startswith("http") or
+                    source.replace('.', '').isdigit()):
                 messagebox.showerror("Error",
-                    "Source must be a webcam index (0, 1, ...) or\n"
-                    "an HTTP URL (http://IP:81/stream)")
+                    "Source must be:\n"
+                    "  • Webcam index (0, 1, ...)\n"
+                    "  • ESP32 IP address (192.168.x.x)\n"
+                    "  • HTTP URL (http://IP:81/stream)")
                 return
 
         # Configure OSC

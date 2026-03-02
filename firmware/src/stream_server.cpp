@@ -1,18 +1,14 @@
 /**
- * VRC Facial Tracker - MJPEG Stream Server
+ * VRC Facial Tracker - MJPEG Stream Server (DEPRECATED)
  *
- * Serves camera frames as MJPEG over HTTP.
- * Based on the ESP32-CAM streaming pattern but simplified for
- * single-client VRC tracking use.
- *
- * Endpoints:
- *   GET /stream  — MJPEG multipart stream
- *   GET /        — Simple status page with stream link
+ * Replaced by udp_stream.cpp for lower latency.
+ * Kept for reference. This file is excluded from compilation.
  */
 
 #include "config.h"
 
-#if TRACKER_BACKEND == TRACKER_BACKEND_STREAM
+/* Disabled: replaced by UDP streaming (udp_stream.cpp) */
+#if 0  /* was: TRACKER_BACKEND == TRACKER_BACKEND_STREAM */
 
 #include "stream_server.h"
 #include <Arduino.h>
