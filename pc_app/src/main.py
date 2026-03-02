@@ -2,20 +2,23 @@
 """
 VRC Facial Tracker — PC Application
 
-Receives camera frames from an ESP32 MJPEG stream (or a local webcam),
+Receives camera frames from an ESP32 via UDP (or from a local webcam),
 runs MediaPipe FaceLandmarker (Tasks API) to extract 478 landmarks and
 52 ARKit-compatible blend shapes, then sends VRChat-compatible parameters
 via OSC.
 
 Usage:
-  # From ESP32 stream
-  python -m pc_app --esp32 http://192.168.1.100:81/stream
+  # From ESP32 (UDP — lowest latency)
+  python -m pc_app --esp32 192.168.1.100
+
+  # From ESP32 with custom port
+  python -m pc_app --esp32 192.168.1.100 --esp32-port 5555
 
   # From webcam (default)
   python -m pc_app --webcam 0
 
   # Custom OSC target
-  python -m pc_app --esp32 http://192.168.1.100:81/stream \
+  python -m pc_app --esp32 192.168.1.100 \\
       --osc-ip 127.0.0.1 --osc-port 9000
 
 Key bindings (preview window):
@@ -82,12 +85,14 @@ def parse_args() -> argparse.Namespace:
     src = p.add_mutually_exclusive_group()
     src.add_argument(
         "--esp32", type=str, default=None,
-        help="ESP32 MJPEG stream URL (e.g. http://192.168.1.100:81/stream)",
+        help="ESP32 IP address for UDP stream (e.g. 192.168.1.100)",
     )
     src.add_argument(
         "--webcam", type=int, default=None,
         help="Webcam device index (default: 0)",
     )
+    p.add_argument("--esp32-port", type=int, default=5555,
+                    help="ESP32 UDP port (default: 5555)")
     p.add_argument("--osc-ip", type=str, default="127.0.0.1",
                     help="VRChat OSC target IP (default: 127.0.0.1)")
     p.add_argument("--osc-port", type=int, default=9000,
@@ -98,8 +103,8 @@ def parse_args() -> argparse.Namespace:
                     help="Disable OpenCV preview window")
     p.add_argument("--mirror", action="store_true",
                     help="Mirror the preview (useful for webcam)")
-    p.add_argument("--fps-limit", type=int, default=30,
-                    help="Max processing FPS (default: 30)")
+    p.add_argument("--fps-limit", type=int, default=0,
+                    help="Max processing FPS (0 = unlimited, default: 0)")
     return p.parse_args()
 
 
@@ -212,23 +217,34 @@ def main() -> None:
     model_path = ensure_model()
 
     # ---- Video source ----
+    use_udp = False
     if args.esp32:
-        source = args.esp32
-        print(f"[INFO] Connecting to ESP32 stream: {source}")
+        if args.esp32.startswith('http'):
+            # Legacy: MJPEG over HTTP (kept for backward compat)
+            source = args.esp32
+            print(f"[INFO] Connecting to ESP32 HTTP stream: {source}")
+            cap = cv2.VideoCapture(source)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        else:
+            # UDP mode — lowest latency
+            from .udp_receiver import UdpReceiver
+            use_udp = True
+            source = args.esp32
+            print(f"[INFO] Connecting to ESP32 via UDP: {source}:{args.esp32_port}")
+            cap = UdpReceiver(source, args.esp32_port)
     else:
         source = args.webcam if args.webcam is not None else 0
         print(f"[INFO] Using webcam index: {source}")
         if not args.mirror:
             args.mirror = True
+        cap = cv2.VideoCapture(source)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         print(f"[ERROR] Cannot open video source: {source}")
-        print("  - ESP32: check WiFi connection and URL")
+        print("  - ESP32: check WiFi connection and IP address")
         print("  - Webcam: check device index")
         sys.exit(1)
-
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     # ---- FaceLandmarker ----
     base_options = mp.tasks.BaseOptions(model_asset_path=model_path)
@@ -250,6 +266,7 @@ def main() -> None:
 
     print(f"[INFO] OSC → {args.osc_ip}:{args.osc_port}")
     print(f"[INFO] Smoothing: {args.smoothing}")
+    print(f"[INFO] Transport: {'UDP (low latency)' if use_udp else 'TCP/HTTP'}")
     if not args.no_preview:
         print("[INFO] Preview: q/ESC=quit, d=debug, m=mirror")
 
@@ -261,7 +278,8 @@ def main() -> None:
     frame_count = 0
     last_time = time.time()
     blend_shapes: dict[str, float] = {}
-    timestamp_ms = 0
+    # Use real monotonic timestamps for MediaPipe (monotonically increasing)
+    _t0_mono = time.monotonic()
 
     try:
         while True:
@@ -269,21 +287,26 @@ def main() -> None:
 
             ret, frame = cap.read()
             if not ret:
-                if args.esp32:
+                if args.esp32 and not use_udp:
+                    # HTTP reconnect
                     print("[WARN] Stream dropped, reconnecting...")
                     cap.release()
                     time.sleep(1.0)
                     cap = cv2.VideoCapture(source)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     continue
+                elif use_udp:
+                    # UDP: no data yet, just retry (read() returns False
+                    # after ~100ms timeout, which is normal before first frame)
+                    continue
                 else:
                     print("[ERROR] Webcam read failed")
                     break
 
-            # MediaPipe Image
+            # MediaPipe Image (real timestamp for best tracking accuracy)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            timestamp_ms += 33
+            timestamp_ms = int((time.monotonic() - _t0_mono) * 1000)
 
             # Detect
             result = landmarker.detect_for_video(mp_image, timestamp_ms)
@@ -332,15 +355,19 @@ def main() -> None:
                 elif key == ord('m'):
                     mirror = not mirror
 
-            # FPS limit
-            elapsed = time.time() - t0
-            if frame_interval > elapsed:
-                time.sleep(frame_interval - elapsed)
+            # FPS limit (default: 0 = unlimited for lowest latency)
+            if frame_interval > 0:
+                elapsed = time.time() - t0
+                if frame_interval > elapsed:
+                    time.sleep(frame_interval - elapsed)
 
             frame_count += 1
             if frame_count % 300 == 0:
+                extra = ""
+                if use_udp:
+                    extra = f" | drops={cap.drop_count} jpg={cap.jpeg_size}B"
                 print(f"[INFO] FPS: {fps:.1f} | OSC: {osc.messages_sent}"
-                      f" | BS: {len(blend_shapes)}")
+                      f" | BS: {len(blend_shapes)}{extra}")
 
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted")
