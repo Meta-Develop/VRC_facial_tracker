@@ -19,9 +19,10 @@
 // ---------------------------------------------------------------------------
 #if TRACKER_BACKEND == TRACKER_BACKEND_ESP_WHO
   #if defined(__has_include)
-    #if __has_include("human_face_detect_msr01.hpp")
+    #if __has_include("human_face_detect_msr01.hpp") && __has_include("human_face_detect_mnp01.hpp")
       #define TRACKER_HAS_ESP_DL 1
       #include "human_face_detect_msr01.hpp"
+      #include "human_face_detect_mnp01.hpp"
       #include <list>
     #endif
   #endif
@@ -46,7 +47,8 @@ static FaceData smoothed_face = {};
 // ESP-DL detector instance
 // ---------------------------------------------------------------------------
 #if defined(TRACKER_HAS_ESP_DL)
-static HumanFaceDetectMSR01 *s_detector = nullptr;
+static HumanFaceDetectMSR01 *s_detector_s1 = nullptr;
+static HumanFaceDetectMNP01 *s_detector_s2 = nullptr;
 #endif
 
 // ---------------------------------------------------------------------------
@@ -216,12 +218,13 @@ static float region_saturation_mean(const camera_fb_t *fb, int x0, int y0, int x
 void tracker_init() {
     smoothed_face = {};
 #if defined(TRACKER_HAS_ESP_DL)
-    // MSR01 params: score_threshold, nms_threshold, top_k, resize_scale
-    s_detector = new HumanFaceDetectMSR01(0.3F, 0.5F, 10, 0.2F);
-    if (s_detector) {
-        Serial.println("Tracker: ESP-DL face detector allocated");
+    // Two-stage face detector (official esp-dl example parameters)
+    s_detector_s1 = new HumanFaceDetectMSR01(0.1F, 0.5F, 10, 0.2F);
+    s_detector_s2 = new HumanFaceDetectMNP01(0.5F, 0.3F, 5);
+    if (s_detector_s1 && s_detector_s2) {
+        Serial.println("Tracker: ESP-DL two-stage face detector allocated");
     } else {
-        Serial.println("Tracker: WARNING - failed to allocate face detector");
+        Serial.println("Tracker: WARNING - failed to allocate two-stage face detector");
     }
 #endif
     Serial.printf("Tracker: Initialized (%s backend)\n", TRACKER_BACKEND_LABEL);
@@ -240,13 +243,17 @@ static FaceData tracker_process_esp_who(camera_fb_t *fb) {
     FaceData face = {};
 
     // ESP-DL expects RGB565 input
-    if (!s_detector || fb->format != PIXFORMAT_RGB565) {
+    if (!s_detector_s1 || !s_detector_s2 || fb->format != PIXFORMAT_RGB565) {
         return tracker_process_heuristic(fb);
     }
 
-    std::list<dl::detect::result_t> results =
-        s_detector->infer((uint16_t *)fb->buf,
-                          {(int)fb->height, (int)fb->width, 3});
+    std::list<dl::detect::result_t> &candidates =
+        s_detector_s1->infer((uint16_t *)fb->buf,
+                             {(int)fb->height, (int)fb->width, 3});
+    std::list<dl::detect::result_t> &results =
+        s_detector_s2->infer((uint16_t *)fb->buf,
+                             {(int)fb->height, (int)fb->width, 3},
+                             candidates);
 
     if (results.empty()) {
         smoothed_face.detected = false;
@@ -264,8 +271,8 @@ static FaceData tracker_process_esp_who(camera_fb_t *fb) {
     face.detected = true;
 
     // Extract expression parameters from 5-point keypoints
-    // Layout: [left_eye_x, left_eye_y, right_eye_x, right_eye_y,
-    //          nose_x, nose_y, mouth_left_x, mouth_left_y,
+    // Layout: [left_eye_x, left_eye_y, mouth_left_x, mouth_left_y,
+    //          nose_x, nose_y, right_eye_x, right_eye_y,
     //          mouth_right_x, mouth_right_y]
     if (best->keypoint.size() >= 10) {
         int box_w = best->box[2] - best->box[0];
@@ -275,18 +282,18 @@ static FaceData tracker_process_esp_who(camera_fb_t *fb) {
 
         // Eye vertical position relative to face box
         float left_eye_rel  = (float)(best->keypoint[1] - best->box[1]) / box_h;
-        float right_eye_rel = (float)(best->keypoint[3] - best->box[1]) / box_h;
+        float right_eye_rel = (float)(best->keypoint[7] - best->box[1]) / box_h;
 
         // Mouth width relative to face width
-        float mouth_w = (float)abs(best->keypoint[8] - best->keypoint[6]);
+        float mouth_w = (float)abs(best->keypoint[8] - best->keypoint[2]);
         float mouth_ratio = mouth_w / (float)box_w;
 
         // Nose-to-mouth-center vertical distance for jaw estimation
-        float mouth_cy = (best->keypoint[7] + best->keypoint[9]) / 2.0f;
+        float mouth_cy = (best->keypoint[3] + best->keypoint[9]) / 2.0f;
         float jaw_dist = (mouth_cy - best->keypoint[5]) / (float)box_h;
 
         // Mouth corner vertical offset for smile estimation
-        float mouth_left_y  = (float)(best->keypoint[7] - best->box[1]) / box_h;
+        float mouth_left_y  = (float)(best->keypoint[3] - best->box[1]) / box_h;
         float mouth_right_y = (float)(best->keypoint[9] - best->box[1]) / box_h;
         float nose_rel_y    = (float)(best->keypoint[5] - best->box[1]) / box_h;
         float mouth_uplift  = nose_rel_y - ((mouth_left_y + mouth_right_y) / 2.0f);
