@@ -50,6 +50,7 @@ task.md
 *.tmp
 temp_*
 debug_*
+!pc_app/src/debug_tool.py
 
 # ESP-IDF
 sdkconfig.old
