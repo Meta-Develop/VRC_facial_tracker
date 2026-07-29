@@ -1,0 +1,231 @@
+name: Public Repository CI
+
+"on":
+  push: {}
+  pull_request: {}
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    public-ci-${{ github.workflow }}-${{
+    github.event.pull_request.head.repo.full_name || github.repository }}-${{
+    github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: Firmware compile / ${{ matrix.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - xiao_stream
+          - xiao_tcp_still
+          - xiao_usb_still
+          - xiao_esp32s3
+          - xiao_espidf
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+          cache: pip
+
+      - name: Install the PlatformIO toolchain
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input \
+            pip==25.1.1 \
+            platformio==6.1.18
+          python --version
+          platformio --version
+
+      - name: Verify the firmware environment is declared
+        env:
+          FIRMWARE_ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          set -euo pipefail
+          case "$FIRMWARE_ENVIRONMENT" in
+            xiao_stream)
+              expected_section="[env:xiao_stream]"
+              ;;
+            xiao_tcp_still)
+              expected_section="[env:xiao_tcp_still]"
+              ;;
+            xiao_usb_still)
+              expected_section="[env:xiao_usb_still]"
+              ;;
+            xiao_esp32s3)
+              expected_section="[env:xiao_esp32s3]"
+              ;;
+            xiao_espidf)
+              expected_section="[env:xiao_espidf]"
+              ;;
+            *)
+              echo "::error::Unknown firmware environment: $FIRMWARE_ENVIRONMENT"
+              exit 1
+              ;;
+          esac
+          if ! grep -Fqx "$expected_section" firmware/platformio.ini; then
+            echo "::error::firmware/platformio.ini does not declare $expected_section. Track the public source gap in issue #2."
+            exit 1
+          fi
+
+      - name: Compile the firmware environment
+        env:
+          FIRMWARE_ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          set -euo pipefail
+          case "$FIRMWARE_ENVIRONMENT" in
+            xiao_stream)
+              platformio run --project-dir firmware --environment xiao_stream
+              ;;
+            xiao_tcp_still)
+              platformio run --project-dir firmware --environment xiao_tcp_still
+              ;;
+            xiao_usb_still)
+              platformio run --project-dir firmware --environment xiao_usb_still
+              ;;
+            xiao_esp32s3)
+              platformio run --project-dir firmware --environment xiao_esp32s3
+              ;;
+            xiao_espidf)
+              platformio run --project-dir firmware --environment xiao_espidf
+              ;;
+            *)
+              echo "::error::Unknown firmware environment: $FIRMWARE_ENVIRONMENT"
+              exit 1
+              ;;
+          esac
+
+  training-export-static:
+    name: Training dependencies and export-static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+          cache: pip
+
+      - name: Verify training sources and manifest exist
+        run: |
+          set -euo pipefail
+          required_paths=(
+            training/__init__.py
+            training/model.py
+            training/export_onnx.py
+            training/requirements.txt
+          )
+          for required_path in "${required_paths[@]}"; do
+            if [[ ! -f "$required_path" ]]; then
+              echo "::error::Missing public training source: $required_path. Track the source gap in issue #2."
+              exit 1
+            fi
+          done
+
+      - name: Install training dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input \
+            pip==25.1.1
+          python -m pip install --disable-pip-version-check --no-input \
+            -r pc_app/requirements.txt \
+            -r training/requirements.txt
+          python -m pip check
+
+      - name: Compile and import static export modules
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python -m compileall -q training
+          python - <<'PY'
+          import importlib
+
+          modules = (
+              "training",
+              "training.model",
+              "training.export_onnx",
+          )
+          for module in modules:
+              importlib.import_module(module)
+              print(f"imported {module}")
+          PY
+
+  pc-app:
+    name: PC app import and static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.9"
+          cache: pip
+
+      - name: Install bounded PC app dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input \
+            pip==25.1.1 \
+            mediapipe==0.10.21 \
+            numpy==1.26.4 \
+            opencv-python==4.11.0.86 \
+            Pillow==11.1.0 \
+            python-osc==1.9.3
+          python -m pip check
+
+      - name: Compile Python sources
+        run: |
+          set -euo pipefail
+          python -m compileall -q pc_app
+
+      - name: Import PC app modules without starting runtime I/O
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib
+
+          modules = (
+              "pc_app",
+              "pc_app.src",
+              "pc_app.src.debug_tool",
+              "pc_app.src.face_params",
+              "pc_app.src.gui",
+              "pc_app.src.main",
+              "pc_app.src.osc_sender",
+              "pc_app.src.udp_receiver",
+          )
+          for module in modules:
+              importlib.import_module(module)
+              print(f"imported {module}")
+          PY
